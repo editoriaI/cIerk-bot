@@ -2,7 +2,6 @@ import os
 
 import discord
 from dotenv import load_dotenv
-
 from shared_energy import DISCORD_READY_MESSAGE, ENERGY_TAG
 from unboxing_store import get_discord_config, save_discord_config
 
