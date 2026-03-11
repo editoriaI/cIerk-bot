@@ -6,7 +6,13 @@ from dotenv import load_dotenv
 from highrise import BaseBot, __main__
 from highrise.models import Position, SessionMetadata, User
 from pricing_engine import PriceEngine, parse_item_query
-from shared_energy import SUMMON_WHISPER_TEMPLATE, UNBOXING_QUESTIONS
+from shared_energy import (
+    HELP_ALIASES,
+    HELP_OVERVIEW_LINES,
+    HELP_SECTIONS,
+    SUMMON_WHISPER_TEMPLATE,
+    UNBOXING_QUESTIONS,
+)
 from unboxing_store import get_highrise_config, save_highrise_config
 
 
@@ -43,12 +49,46 @@ class Bot(BaseBot):
             await self._unbox_status(user)
             return
 
+        if command == "!help" or command.startswith("!help "):
+            await self._handle_help(user, raw)
+            return
+
         if command.startswith("!answer "):
             answer = raw[len("!answer ") :].strip()
             await self._handle_unbox_answer(user, answer)
             return
 
         await self._maybe_handle_price_inquiry(user, raw)
+
+    async def _handle_help(self, user: User, raw_message: str) -> None:
+        query = raw_message[len("!help") :].strip().lower()
+        if not query:
+            await self._send_help_lines(user.id, HELP_OVERVIEW_LINES)
+            return
+
+        section = HELP_ALIASES.get(query, query)
+        if section in HELP_SECTIONS:
+            await self._send_help_lines(user.id, HELP_SECTIONS[section])
+            return
+
+        command_key = query if query.startswith("!") else f"!{query}"
+        for lines in HELP_SECTIONS.values():
+            matching = [line for line in lines if command_key in line.lower()]
+            if matching:
+                await self._send_help_lines(
+                    user.id,
+                    [f"Matches for {command_key}:", *matching],
+                )
+                return
+
+        await self.highrise.send_whisper(
+            user.id,
+            "No help entry found. Try !help or !help general.",
+        )
+
+    async def _send_help_lines(self, user_id: str, lines: list[str]) -> None:
+        for line in lines:
+            await self.highrise.send_whisper(user_id, line)
 
     async def _start_unboxing(self, user: User) -> None:
         if self.unbox_admins and user.username.lower() not in self.unbox_admins:
@@ -175,9 +215,10 @@ class Bot(BaseBot):
         await self.highrise.send_whisper(
             user.id,
             (
-                f"Price check: {result['item']} -> ~{result['estimated_price']}g "
-                f"(latest seen {result['latest_price_seen']}g via {result['latest_source']}, "
-                f"samples {result['sample_count']})."
+                f"Price check: {result['item']} -> avg ~{result['estimated_price']}g | "
+                f"last sold {result['last_sold_price']}g via {result['last_sold_source']} | "
+                f"latest {result['latest_kind']} {result['latest_price_seen']}g via {result['latest_source']} | "
+                f"samples {result['sample_count']} (bm {result['bm_samples']}, #/signal {result['signal_samples']})."
             ),
         )
 

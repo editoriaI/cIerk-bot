@@ -4,7 +4,7 @@ import re
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 
@@ -87,12 +87,27 @@ def _to_epoch(value: str) -> float:
         return 0.0
 
 
+def _signal_kind(text: str) -> str:
+    lower = text.lower()
+    if "last sold" in lower or " sold " in f" {lower} ":
+        return "sold"
+    if "#selling" in lower or "selling" in lower:
+        return "selling"
+    if "#buying" in lower or "buying" in lower:
+        return "buying"
+    if "offer" in lower:
+        return "offer"
+    return "unknown"
+
+
 @dataclass
 class PriceHit:
     price: float
     source: str
     weight: float
     timestamp: float
+    signal_kind: str
+    market_type: str
 
 
 class PriceEngine:
@@ -135,13 +150,25 @@ class PriceEngine:
         weight_total = sum(h.weight for h in hits) or 1.0
         estimate = weighted_sum / weight_total
         latest = max(hits, key=lambda h: h.timestamp if h.timestamp else 0.0)
+        sold_hits = [h for h in hits if h.signal_kind == "sold"]
+        latest_sold = max(sold_hits, key=lambda h: h.timestamp if h.timestamp else 0.0) if sold_hits else latest
+
+        bm_hits = sum(1 for h in hits if h.market_type == "bm")
+        signal_hits = len(hits) - bm_hits
+
         return {
             "item": normalized,
             "found": True,
             "estimated_price": round(estimate, 2),
             "latest_price_seen": round(latest.price, 2),
             "latest_source": latest.source,
+            "latest_kind": latest.signal_kind,
+            "last_sold_price": round(latest_sold.price, 2),
+            "last_sold_source": latest_sold.source,
             "sample_count": len(hits),
+            "bm_samples": bm_hits,
+            "signal_samples": signal_hits,
+            "checked_at": datetime.now(timezone.utc).isoformat(),
         }
 
     def _collect_from_paths(
@@ -176,9 +203,11 @@ class PriceEngine:
                     results.append(
                         PriceHit(
                             price=picked,
-                            source=f"{path}{' (blackmarket-30%)' if blackmarket else ''}",
+                            source=f"{path}{' (bm-30%)' if blackmarket else ' (#/signal)'}",
                             weight=weight,
                             timestamp=_to_epoch(_timestamp(node)),
+                            signal_kind=_signal_kind(text_blob),
+                            market_type="bm" if blackmarket else "signal",
                         )
                     )
         return results
@@ -190,14 +219,14 @@ class PriceEngine:
 
     @staticmethod
     def _weight_for_text(text: str, blackmarket: bool) -> float:
-        t = text.lower()
-        if "sold" in t or "last sold" in t:
+        signal = _signal_kind(text)
+        if signal == "sold":
             base = 1.6
-        elif "#selling" in t or "selling" in t:
+        elif signal == "selling":
             base = 1.2
-        elif "#buying" in t or "buying" in t:
+        elif signal == "buying":
             base = 1.0
-        elif "offer" in t:
+        elif signal == "offer":
             base = 0.9
         else:
             base = 0.7
