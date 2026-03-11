@@ -58,3 +58,14 @@ Use one command to run both bots with auto-restart after code or `.env` changes:
 cd C:\Users\Brian Ware\highrise-bot
 .\start-dev.ps1
 ```
+
+## PR Workflow
+
+Create a branch and push it for review:
+
+```powershell
+cd C:\Users\Brian Ware\cIerk-bot
+.\scripts\new-pr.ps1 your-branch-name
+```
+
+Then open a Pull Request for the pushed branch on GitHub.
