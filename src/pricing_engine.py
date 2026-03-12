@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import re
 import urllib.parse
@@ -11,6 +12,23 @@ from typing import Any
 PRICE_RE = re.compile(r"(?<!\d)(\d{1,7})(?:\s*(?:g|gold))?(?!\d)", re.IGNORECASE)
 HASH_ITEM_RE = re.compile(r"#([A-Za-z0-9_]+)")
 HOW_MUCH_RE = re.compile(r"how much(?:\s+is|'s)?\s+(.+?)\??$", re.IGNORECASE)
+PRICE_QUERY_RE = re.compile(
+    r"^(?:!?price|pricing)\s*(?::|\s+for|\s+of)?\s+(.+)$",
+    re.IGNORECASE,
+)
+
+logger = logging.getLogger(__name__)
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name, "")
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    return max(1.0, value)
 
 
 def normalize_item_name(value: str) -> str:
@@ -31,6 +49,10 @@ def parse_item_query(message: str) -> str | None:
     if lower.startswith("!price "):
         return normalize_item_name(text[len("!price ") :])
 
+    plain_match = PRICE_QUERY_RE.match(text)
+    if plain_match:
+        return normalize_item_name(plain_match.group(1))
+
     match = HOW_MUCH_RE.search(text)
     if match:
         return normalize_item_name(match.group(1))
@@ -42,7 +64,7 @@ def parse_item_query(message: str) -> str | None:
     return None
 
 
-def _json_get(url: str, timeout: int = 8) -> Any:
+def _json_get(url: str, timeout: float = 8) -> Any:
     req = urllib.request.Request(url, headers={"accept": "application/json"})
     with urllib.request.urlopen(req, timeout=timeout) as res:
         raw = res.read().decode("utf-8", errors="replace")
@@ -113,6 +135,7 @@ class PriceHit:
 class PriceEngine:
     def __init__(self) -> None:
         self.base_url = os.getenv("PRICING_API_BASE", "http://localhost:4000/highrise").rstrip("/")
+        self.http_timeout = _env_float("PRICING_HTTP_TIMEOUT", 6.0)
         self.blackmarket_paths = [
             p.strip()
             for p in os.getenv(
@@ -136,15 +159,37 @@ class PriceEngine:
         hash_variant = f"#{compact}"
 
         hits: list[PriceHit] = []
-        hits.extend(self._collect_from_paths(normalized, hash_variant, self.blackmarket_paths, blackmarket=True))
-        hits.extend(self._collect_from_paths(normalized, hash_variant, self.signal_paths, blackmarket=False))
+        errors: list[str] = []
+        hits.extend(
+            self._collect_from_paths(
+                normalized,
+                hash_variant,
+                self.blackmarket_paths,
+                errors,
+                blackmarket=True,
+            )
+        )
+        hits.extend(
+            self._collect_from_paths(
+                normalized,
+                hash_variant,
+                self.signal_paths,
+                errors,
+                blackmarket=False,
+            )
+        )
 
         if not hits:
-            return {
+            response: dict[str, Any] = {
                 "item": normalized,
                 "found": False,
                 "message": "No recent price signals found.",
             }
+            if errors:
+                response["error"] = "Pricing backend unreachable for one or more feeds."
+                response["error_count"] = len(errors)
+                response["error_samples"] = errors[:2]
+            return response
 
         weighted_sum = sum(h.price * h.weight for h in hits)
         weight_total = sum(h.weight for h in hits) or 1.0
@@ -176,21 +221,30 @@ class PriceEngine:
         item_name: str,
         hash_variant: str,
         paths: list[str],
+        errors: list[str],
         blackmarket: bool,
     ) -> list[PriceHit]:
         results: list[PriceHit] = []
+        compact_name = item_name.replace(" ", "")
         for path in paths:
             for url in self._candidate_urls(path):
                 try:
-                    payload = _json_get(url)
-                except Exception:
+                    payload = _json_get(url, timeout=self.http_timeout)
+                except Exception as exc:
+                    errors.append(f"{url} -> {type(exc).__name__}: {exc}")
+                    logger.warning("Pricing fetch failed for %s: %s", url, exc)
                     continue
                 for node in _walk(payload):
                     text_blob = _text_blob(node)
                     if not text_blob:
                         continue
                     normalized_text = normalize_item_name(text_blob)
-                    if item_name not in normalized_text and hash_variant.lower() not in text_blob.lower():
+                    normalized_text_compact = normalized_text.replace(" ", "")
+                    if (
+                        item_name not in normalized_text
+                        and compact_name not in normalized_text_compact
+                        and hash_variant.lower() not in text_blob.lower()
+                    ):
                         continue
 
                     prices = [float(m.group(1)) for m in PRICE_RE.finditer(text_blob)]
