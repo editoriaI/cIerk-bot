@@ -1,10 +1,17 @@
-import os
 import asyncio
+import logging
+import os
 from typing import Optional
 
 from dotenv import load_dotenv
 from highrise import BaseBot, __main__
 from highrise.models import Position, SessionMetadata, User
+from bot_common import (
+    build_price_response_text,
+    configure_logging,
+    perform_price_lookup,
+    read_timeout_env,
+)
 from pricing_engine import PriceEngine, parse_item_query
 from shared_energy import (
     HELP_ALIASES,
@@ -16,6 +23,10 @@ from shared_energy import (
 from unboxing_store import get_highrise_config, save_highrise_config
 
 
+configure_logging("clerk")
+logger = logging.getLogger(__name__)
+
+
 class Bot(BaseBot):
     def __init__(self) -> None:
         super().__init__()
@@ -25,40 +36,55 @@ class Bot(BaseBot):
         admins = os.getenv("HIGHRISE_UNBOX_ADMINS", "")
         self.unbox_admins = {name.strip().lower() for name in admins.split(",") if name.strip()}
         self.pricing = PriceEngine()
+        self.price_timeout = read_timeout_env("PRICE_LOOKUP_TIMEOUT", 6.0)
 
     async def on_start(self, session_metadata: SessionMetadata) -> None:
         self.bot_user_id = session_metadata.user_id
-        print(
+        logger.info(
             f"Connected as {session_metadata.user_id} "
             f"in room {session_metadata.room_info.room_name}"
         )
 
     async def on_chat(self, user: User, message: str) -> None:
-        raw = message.strip()
-        command = raw.lower()
+        try:
+            raw = message.strip()
+            command = raw.lower()
+            logger.info("chat user=%s id=%s msg=%s", user.username, user.id, message)
 
-        if command == "!bot":
-            await self._summon_to_user(user)
-            return
+            if command == "!bot":
+                await self._summon_to_user(user)
+                return
 
-        if command == "!unbox":
-            await self._start_unboxing(user)
-            return
+            if command == "!unbox":
+                await self._start_unboxing(user)
+                return
 
-        if command == "!unbox status":
-            await self._unbox_status(user)
-            return
+            if command == "!unbox status":
+                await self._unbox_status(user)
+                return
 
-        if command == "!help" or command.startswith("!help "):
-            await self._handle_help(user, raw)
-            return
+            if command == "!help" or command.startswith("!help "):
+                await self._handle_help(user, raw)
+                return
 
-        if command.startswith("!answer "):
-            answer = raw[len("!answer ") :].strip()
-            await self._handle_unbox_answer(user, answer)
-            return
+            if command.startswith("!answer "):
+                answer = raw[len("!answer ") :].strip()
+                await self._handle_unbox_answer(user, answer)
+                return
 
-        await self._maybe_handle_price_inquiry(user, raw)
+            await self._maybe_handle_price_inquiry(user, raw)
+        except Exception as exc:
+            logger.exception("on_chat failed user=%s id=%s msg=%s", user.username, user.id, message)
+            await self._safe_whisper(
+                user.id,
+                f"Sorry, I hit an error while handling that: {type(exc).__name__}: {exc}",
+            )
+
+    async def _safe_whisper(self, user_id: str, text: str) -> None:
+        try:
+            await self.highrise.send_whisper(user_id, text)
+        except Exception:
+            logger.exception("failed to whisper user=%s", user_id)
 
     async def _handle_help(self, user: User, raw_message: str) -> None:
         query = raw_message[len("!help") :].strip().lower()
@@ -204,23 +230,10 @@ class Bot(BaseBot):
         if not item:
             return
 
-        result = await asyncio.to_thread(self.pricing.lookup, item)
-        if not result.get("found"):
-            await self.highrise.send_whisper(
-                user.id,
-                f"No fresh price found for '{item}'. Try #ItemName or recent selling context.",
-            )
-            return
-
-        await self.highrise.send_whisper(
-            user.id,
-            (
-                f"Price check: {result['item']} -> avg ~{result['estimated_price']}g | "
-                f"last sold {result['last_sold_price']}g via {result['last_sold_source']} | "
-                f"latest {result['latest_kind']} {result['latest_price_seen']}g via {result['latest_source']} | "
-                f"samples {result['sample_count']} (bm {result['bm_samples']}, #/signal {result['signal_samples']})."
-            ),
-        )
+        result = await perform_price_lookup(self.pricing, item, self.price_timeout, logger)
+        message = build_price_response_text(result, item, self.price_timeout)
+        if message:
+            await self._safe_whisper(user.id, message)
 
 
 if __name__ == "__main__":

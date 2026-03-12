@@ -1,9 +1,21 @@
+import logging
 import os
 
 import discord
+from bot_common import (
+    build_price_response_text,
+    configure_logging,
+    perform_price_lookup,
+    read_timeout_env,
+)
 from dotenv import load_dotenv
+from pricing_engine import PriceEngine, normalize_item_name, parse_item_query
 from shared_energy import DISCORD_READY_MESSAGE, ENERGY_TAG
 from unboxing_store import get_discord_config, save_discord_config
+
+
+configure_logging("clerk")
+logger = logging.getLogger(__name__)
 
 
 class UnboxModal(discord.ui.Modal, title="Victor/Clerk Unboxing"):
@@ -50,11 +62,13 @@ def build_bot() -> discord.Client:
     intents = discord.Intents.default()
     bot = discord.Client(intents=intents)
     tree = discord.app_commands.CommandTree(bot)
+    pricing = PriceEngine()
+    price_timeout = read_timeout_env("PRICE_LOOKUP_TIMEOUT", 6.0)
 
     @bot.event
     async def on_ready() -> None:
         await tree.sync()
-        print(f"{DISCORD_READY_MESSAGE} Logged in as {bot.user}.")
+        logger.info("%s Logged in as %s.", DISCORD_READY_MESSAGE, bot.user)
 
     @tree.command(name="energy", description="Show Clerk shared energy")
     async def energy(interaction: discord.Interaction) -> None:
@@ -67,6 +81,22 @@ def build_bot() -> discord.Client:
         await interaction.response.send_message(
             f"[{ENERGY_TAG}] Use `!bot` in Highrise to summon Clerk to your exact facing."
         )
+
+    @tree.command(name="price", description="Check Highrise market pricing")
+    @discord.app_commands.describe(query="Item name, hashtag, or 'how much is ...' text")
+    async def price(interaction: discord.Interaction, query: str) -> None:
+        normalized = parse_item_query(query) or normalize_item_name(query)
+        if not normalized:
+            await interaction.response.send_message(
+                "Provide an item name, hashtag, or pricing phrase.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(thinking=True, ephemeral=True)
+        result = await perform_price_lookup(pricing, normalized, price_timeout, logger)
+        message = build_price_response_text(result, normalized, price_timeout)
+        await interaction.followup.send(message, ephemeral=True)
 
     @tree.command(name="unbox", description="Interactive setup for Victor/Clerk")
     async def unbox(interaction: discord.Interaction) -> None:
