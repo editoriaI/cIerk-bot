@@ -20,7 +20,7 @@ from shared_energy import (
     SUMMON_WHISPER_TEMPLATE,
     UNBOXING_QUESTIONS,
 )
-from unboxing_store import get_highrise_config, save_highrise_config
+from unboxing_store import get_highrise_config, reset_highrise_config, save_highrise_config
 
 
 configure_logging("clerk")
@@ -57,6 +57,10 @@ class Bot(BaseBot):
 
             if command == "!unbox":
                 await self._start_unboxing(user)
+                return
+
+            if command == "!unbox reset":
+                await self._reset_unboxing(user)
                 return
 
             if command == "!unbox status":
@@ -188,6 +192,30 @@ class Bot(BaseBot):
             user.id,
             "Unboxing complete. Victor/Clerk profile saved for this room.",
         )
+
+    async def _reset_unboxing(self, user: User) -> None:
+        if self.unbox_admins and user.username.lower() not in self.unbox_admins:
+            await self.highrise.send_whisper(
+                user.id, "Only a higher-ranked setup user can reset the unboxing profile."
+            )
+            return
+        if not self.room_id:
+            await self.highrise.send_whisper(
+                user.id, "Cannot reset unboxing: HIGHRISE_ROOM_ID missing."
+            )
+            return
+        reset = reset_highrise_config(self.room_id)
+        self.unbox_sessions.pop(user.id, None)
+        if reset:
+            await self.highrise.send_whisper(
+                user.id,
+                "Unboxing profile cleared. Run !unbox to start fresh.",
+            )
+        else:
+            await self.highrise.send_whisper(
+                user.id,
+                "No saved unboxing profile found for this room. Run !unbox to create one.",
+            )
 
     async def _summon_to_user(self, user: User) -> None:
         room_users = (await self.highrise.get_room_users()).content

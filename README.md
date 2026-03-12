@@ -30,6 +30,7 @@ Edit `.env` with:
 - `PRICING_API_BASE` (default `https://webapi.highrise.game`)
 - `PRICING_BLACKMARKET_PATHS` (blackmarket-style endpoints; values are reduced by 30%)
 - `PRICING_SIGNAL_PATHS` (buy/sell/offer/sold post feeds)
+- `PRICING_PAGE_LIMIT` / `PRICING_MAX_PAGES` (controls WebAPI pagination for price scraping)
 - `HIGHRISE_WEBAPI_AGENT` (optional User-Agent override to mimic Highrise clients)
 - `HIGHRISE_WEBAPI_LANG` (optional Accept-Language override for WebAPI calls)
 - `DISCORD_BOT_TOKEN`

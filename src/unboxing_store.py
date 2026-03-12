@@ -34,6 +34,15 @@ def get_highrise_config(room_id: str) -> dict[str, Any] | None:
     return payload.get("highrise", {}).get(room_id)
 
 
+def reset_highrise_config(room_id: str) -> bool:
+    payload = _load()
+    if room_id in payload.get("highrise", {}):
+        del payload["highrise"][room_id]
+        _save(payload)
+        return True
+    return False
+
+
 def save_discord_config(guild_id: str, configured_by: str, answers: dict[str, str]) -> dict[str, Any]:
     payload = _load()
     payload.setdefault("discord", {})

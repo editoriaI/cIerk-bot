@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import re
+import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
@@ -27,8 +28,10 @@ DEFAULT_WEBAPI_HEADERS = {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ClerkBot/1.0",
     ),
     "accept-language": os.getenv("HIGHRISE_WEBAPI_LANG", "en-US,en;q=0.9"),
-    "origin": os.getenv("HIGHRISE_WEBAPI_ORIGIN", "https://highrise.game"),
-    "referer": os.getenv("HIGHRISE_WEBAPI_REFERER", "https://highrise.game/"),
+    "origin": os.getenv("HIGHRISE_WEBAPI_ORIGIN", "https://create.highrise.game"),
+    "referer": os.getenv("HIGHRISE_WEBAPI_REFERER", "https://create.highrise.game/"),
+    "sec-fetch-mode": "cors",
+    "sec-fetch-site": "same-site",
 }
 
 
@@ -79,9 +82,22 @@ def parse_item_query(message: str) -> str | None:
 def _json_get(url: str, timeout: float = 8) -> Any:
     headers = {**DEFAULT_WEBAPI_HEADERS}
     req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, timeout=timeout) as res:
-        raw = res.read().decode("utf-8", errors="replace")
-        return json.loads(raw)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as res:
+            raw = res.read().decode("utf-8", errors="replace")
+            status = getattr(res, "status", None)
+            if status:
+                logger.debug("WebAPI %s -> HTTP %s", url, status)
+            return json.loads(raw)
+    except urllib.error.HTTPError as exc:
+        body = ""
+        try:
+            body = exc.read().decode("utf-8", errors="replace")
+        except Exception:
+            body = ""
+        snippet = body.strip().replace("\n", " ")[:200]
+        message = snippet or exc.reason or "HTTP error"
+        raise RuntimeError(f"HTTP {exc.code} for {url}: {message}") from exc
 
 
 def _walk(value: Any):
@@ -149,11 +165,13 @@ class PriceEngine:
     def __init__(self) -> None:
         self.base_url = os.getenv("PRICING_API_BASE", DEFAULT_WEBAPI_BASE).rstrip("/")
         self.http_timeout = _env_float("PRICING_HTTP_TIMEOUT", 6.0)
+        self.page_limit = int(os.getenv("PRICING_PAGE_LIMIT", "50"))
+        self.max_pages = int(os.getenv("PRICING_MAX_PAGES", "4"))
         self.blackmarket_paths = [
             p.strip()
             for p in os.getenv(
                 "PRICING_BLACKMARKET_PATHS",
-                "/market/blackmarket,/posts,/feed,/storefront/listings",
+                "/posts",
             ).split(",")
             if p.strip()
         ]
@@ -161,7 +179,7 @@ class PriceEngine:
             p.strip()
             for p in os.getenv(
                 "PRICING_SIGNAL_PATHS",
-                "/posts,/feed,/activities",
+                "/posts,/rooms",
             ).split(",")
             if p.strip()
         ]
@@ -240,49 +258,73 @@ class PriceEngine:
         results: list[PriceHit] = []
         compact_name = item_name.replace(" ", "")
         for path in paths:
-            for url in self._candidate_urls(path):
-                try:
-                    payload = _json_get(url, timeout=self.http_timeout)
-                except Exception as exc:
-                    errors.append(f"{url} -> {type(exc).__name__}: {exc}")
-                    logger.warning("Pricing fetch failed for %s: %s", url, exc)
+            for node in self._fetch_entries(path, errors):
+                text_blob = _text_blob(node)
+                if not text_blob:
                     continue
-                for node in _walk(payload):
-                    text_blob = _text_blob(node)
-                    if not text_blob:
-                        continue
-                    normalized_text = normalize_item_name(text_blob)
-                    normalized_text_compact = normalized_text.replace(" ", "")
-                    if (
-                        item_name not in normalized_text
-                        and compact_name not in normalized_text_compact
-                        and hash_variant.lower() not in text_blob.lower()
-                    ):
-                        continue
+                normalized_text = normalize_item_name(text_blob)
+                normalized_text_compact = normalized_text.replace(" ", "")
+                if (
+                    item_name not in normalized_text
+                    and compact_name not in normalized_text_compact
+                    and hash_variant.lower() not in text_blob.lower()
+                ):
+                    continue
 
-                    prices = [float(m.group(1)) for m in PRICE_RE.finditer(text_blob)]
-                    if not prices:
-                        continue
-                    picked = prices[-1]
-                    weight = self._weight_for_text(text_blob, blackmarket=blackmarket)
-                    if blackmarket:
-                        picked = picked * 0.70
-                    results.append(
-                        PriceHit(
-                            price=picked,
-                            source=f"{path}{' (bm-30%)' if blackmarket else ' (#/signal)'}",
-                            weight=weight,
-                            timestamp=_to_epoch(_timestamp(node)),
-                            signal_kind=_signal_kind(text_blob),
-                            market_type="bm" if blackmarket else "signal",
-                        )
+                prices = [float(m.group(1)) for m in PRICE_RE.finditer(text_blob)]
+                if not prices:
+                    continue
+                picked = prices[-1]
+                weight = self._weight_for_text(text_blob, blackmarket=blackmarket)
+                if blackmarket:
+                    picked = picked * 0.70
+                results.append(
+                    PriceHit(
+                        price=picked,
+                        source=f"{path}{' (bm-30%)' if blackmarket else ' (#/signal)'}",
+                        weight=weight,
+                        timestamp=_to_epoch(_timestamp(node)),
+                        signal_kind=_signal_kind(text_blob),
+                        market_type="bm" if blackmarket else "signal",
                     )
+                )
         return results
 
-    def _candidate_urls(self, path: str) -> list[str]:
-        path = path if path.startswith("/") else f"/{path}"
-        query = urllib.parse.urlencode({"limit": 100})
-        return [f"{self.base_url}{path}?{query}", f"{self.base_url}{path}"]
+    def _fetch_entries(self, path: str, errors: list[str]):
+        cursor: str | None = None
+        for page in range(self.max_pages):
+            url = self._build_url(path, cursor)
+            try:
+                payload = _json_get(url, timeout=self.http_timeout)
+            except Exception as exc:
+                errors.append(f"{url} -> {type(exc).__name__}: {exc}")
+                logger.warning("Pricing fetch failed for %s: %s", url, exc)
+                break
+
+            entries = _extract_entries(payload)
+            if not entries:
+                logger.debug("WebAPI %s returned no entries on page %s", path, page)
+                break
+            for entry in entries:
+                yield entry
+
+            cursor = _next_cursor_token(payload, entries)
+            if not cursor:
+                break
+
+    def _build_url(self, path: str, cursor: str | None) -> str:
+        if path.startswith("http://") or path.startswith("https://"):
+            base = path
+        else:
+            suffix = path if path.startswith("/") else f"/{path}"
+            base = f"{self.base_url}{suffix}"
+        parsed = urllib.parse.urlparse(base)
+        query_items = dict(urllib.parse.parse_qsl(parsed.query))
+        query_items.setdefault("limit", str(self.page_limit))
+        if cursor:
+            query_items["starts_after"] = cursor
+        query = urllib.parse.urlencode(query_items)
+        return urllib.parse.urlunparse(parsed._replace(query=query))
 
     @staticmethod
     def _weight_for_text(text: str, blackmarket: bool) -> float:
@@ -300,3 +342,50 @@ class PriceEngine:
         if blackmarket:
             base += 0.2
         return base
+
+
+ENTRY_KEYS = (
+    "items",
+    "posts",
+    "rooms",
+    "users",
+    "listings",
+    "data",
+    "results",
+    "entries",
+    "feed",
+)
+
+
+def _extract_entries(payload: Any) -> list[dict[str, Any]]:
+    if isinstance(payload, list):
+        return [entry for entry in payload if isinstance(entry, dict)]
+    for key in ENTRY_KEYS:
+        block = payload.get(key) if isinstance(payload, dict) else None
+        if isinstance(block, list) and block:
+            return [entry for entry in block if isinstance(entry, dict)]
+    return []
+
+
+CURSOR_KEYS = ("last_id", "next_id", "cursor", "starts_after", "ends_before", "next_cursor")
+
+
+def _next_cursor_token(payload: Any, entries: list[dict[str, Any]]) -> str | None:
+    if isinstance(payload, dict):
+        for key in CURSOR_KEYS:
+            value = payload.get(key)
+            if isinstance(value, str) and value:
+                return value
+        for container in ("pagination", "meta"):
+            bucket = payload.get(container, {})
+            if isinstance(bucket, dict):
+                for key in CURSOR_KEYS:
+                    value = bucket.get(key)
+                    if isinstance(value, str) and value:
+                        return value
+    for entry in reversed(entries):
+        for key in ("id", "post_id", "room_id", "user_id", "listing_id"):
+            value = entry.get(key)
+            if isinstance(value, str) and value:
+                return value
+    return None
