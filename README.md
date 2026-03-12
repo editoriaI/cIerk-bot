@@ -27,9 +27,11 @@ Edit `.env` with:
 - `HIGHRISE_ROOM_ID`
 - `HIGHRISE_API_TOKEN`
 - `HIGHRISE_UNBOX_ADMINS` (comma-separated usernames allowed to run `!unbox`)
-- `PRICING_API_BASE` (default `http://localhost:4000/highrise`)
+- `PRICING_API_BASE` (default `https://webapi.highrise.game`)
 - `PRICING_BLACKMARKET_PATHS` (blackmarket-style endpoints; values are reduced by 30%)
 - `PRICING_SIGNAL_PATHS` (buy/sell/offer/sold post feeds)
+- `HIGHRISE_WEBAPI_AGENT` (optional User-Agent override to mimic Highrise clients)
+- `HIGHRISE_WEBAPI_LANG` (optional Accept-Language override for WebAPI calls)
 - `DISCORD_BOT_TOKEN`
 
 ## Run

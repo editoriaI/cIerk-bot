@@ -19,6 +19,18 @@ PRICE_QUERY_RE = re.compile(
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_WEBAPI_BASE = "https://webapi.highrise.game"
+DEFAULT_WEBAPI_HEADERS = {
+    "accept": "application/json",
+    "user-agent": os.getenv(
+        "HIGHRISE_WEBAPI_AGENT",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ClerkBot/1.0",
+    ),
+    "accept-language": os.getenv("HIGHRISE_WEBAPI_LANG", "en-US,en;q=0.9"),
+    "origin": os.getenv("HIGHRISE_WEBAPI_ORIGIN", "https://highrise.game"),
+    "referer": os.getenv("HIGHRISE_WEBAPI_REFERER", "https://highrise.game/"),
+}
+
 
 def _env_float(name: str, default: float) -> float:
     raw = os.getenv(name, "")
@@ -65,7 +77,8 @@ def parse_item_query(message: str) -> str | None:
 
 
 def _json_get(url: str, timeout: float = 8) -> Any:
-    req = urllib.request.Request(url, headers={"accept": "application/json"})
+    headers = {**DEFAULT_WEBAPI_HEADERS}
+    req = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(req, timeout=timeout) as res:
         raw = res.read().decode("utf-8", errors="replace")
         return json.loads(raw)
@@ -134,7 +147,7 @@ class PriceHit:
 
 class PriceEngine:
     def __init__(self) -> None:
-        self.base_url = os.getenv("PRICING_API_BASE", "http://localhost:4000/highrise").rstrip("/")
+        self.base_url = os.getenv("PRICING_API_BASE", DEFAULT_WEBAPI_BASE).rstrip("/")
         self.http_timeout = _env_float("PRICING_HTTP_TIMEOUT", 6.0)
         self.blackmarket_paths = [
             p.strip()
