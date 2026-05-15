@@ -25,7 +25,7 @@ DEFAULT_WEBAPI_HEADERS = {
     "accept": "application/json",
     "user-agent": os.getenv(
         "HIGHRISE_WEBAPI_AGENT",
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ClerkBot/1.0",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) cIerkBot/1.0",
     ),
     "accept-language": os.getenv("HIGHRISE_WEBAPI_LANG", "en-US,en;q=0.9"),
     "origin": os.getenv("HIGHRISE_WEBAPI_ORIGIN", "https://create.highrise.game"),

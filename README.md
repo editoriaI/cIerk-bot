@@ -1,4 +1,4 @@
-# Highrise Bot
+# cIerk Highrise Bot
 
 ## Command
 
@@ -16,7 +16,7 @@ The summon confirmation is whispered to the user with exact coordinates and faci
 ## Setup
 
 ```powershell
-cd C:\Users\Brian Ware\highrise-bot
+cd C:\Users\Brian Ware\cIerk-bot
 python -m venv .venv
 .\.venv\Scripts\python -m pip install -r requirements.txt
 copy .env.example .env
@@ -38,14 +38,14 @@ Edit `.env` with:
 ## Run
 
 ```powershell
-cd C:\Users\Brian Ware\highrise-bot
+cd C:\Users\Brian Ware\cIerk-bot
 .\.venv\Scripts\python src\bot.py
 ```
 
 ## Run Discord Bot
 
 ```powershell
-cd C:\Users\Brian Ware\highrise-bot
+cd C:\Users\Brian Ware\cIerk-bot
 .\.venv\Scripts\python src\discord_bot.py
 ```
 
@@ -58,7 +58,7 @@ Discord slash setup:
 Use one command to run both bots with auto-restart after code or `.env` changes:
 
 ```powershell
-cd C:\Users\Brian Ware\highrise-bot
+cd C:\Users\Brian Ware\cIerk-bot
 .\start-dev.ps1
 ```
 

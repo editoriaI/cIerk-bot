@@ -190,7 +190,7 @@ class Bot(BaseBot):
         self.unbox_sessions.pop(user.id, None)
         await self.highrise.send_whisper(
             user.id,
-            "Unboxing complete. Victor/Clerk profile saved for this room.",
+            "Unboxing complete. cIerk profile saved for this room.",
         )
 
     async def _reset_unboxing(self, user: User) -> None:

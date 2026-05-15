@@ -62,7 +62,7 @@ def start_bots(python_exe: str) -> tuple[subprocess.Popen, subprocess.Popen]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Auto-restart Clerk bots on file changes.")
+    parser = argparse.ArgumentParser(description="Auto-restart cIerk bots on file changes.")
     parser.add_argument("--interval", type=float, default=1.5, help="Polling interval in seconds.")
     args = parser.parse_args()
 

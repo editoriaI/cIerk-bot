@@ -18,7 +18,7 @@ configure_logging("clerk")
 logger = logging.getLogger(__name__)
 
 
-class UnboxModal(discord.ui.Modal, title="Victor/Clerk Unboxing"):
+class UnboxModal(discord.ui.Modal, title="cIerk Unboxing"):
     primary_mode = discord.ui.TextInput(
         label="Primary Mode",
         placeholder="trading / community / support / events",
@@ -64,22 +64,26 @@ def build_bot() -> discord.Client:
     tree = discord.app_commands.CommandTree(bot)
     pricing = PriceEngine()
     price_timeout = read_timeout_env("PRICE_LOOKUP_TIMEOUT", 6.0)
+    synced_commands = False
 
     @bot.event
     async def on_ready() -> None:
-        await tree.sync()
+        nonlocal synced_commands
+        if not synced_commands:
+            await tree.sync()
+            synced_commands = True
         logger.info("%s Logged in as %s.", DISCORD_READY_MESSAGE, bot.user)
 
-    @tree.command(name="energy", description="Show Clerk shared energy")
+    @tree.command(name="energy", description="Show cIerk shared energy")
     async def energy(interaction: discord.Interaction) -> None:
         await interaction.response.send_message(
-            f"[{ENERGY_TAG}] Same vibe as Highrise Clerk. Commands are now synced by tone."
+            f"[{ENERGY_TAG}] Same vibe as Highrise cIerk. Commands are now synced by tone."
         )
 
-    @tree.command(name="bot", description="Highrise Clerk summon help")
+    @tree.command(name="bot", description="Highrise cIerk summon help")
     async def bot_command(interaction: discord.Interaction) -> None:
         await interaction.response.send_message(
-            f"[{ENERGY_TAG}] Use `!bot` in Highrise to summon Clerk to your exact facing."
+            f"[{ENERGY_TAG}] Use `!bot` in Highrise to summon cIerk to your exact facing."
         )
 
     @tree.command(name="price", description="Check Highrise market pricing")
@@ -98,7 +102,7 @@ def build_bot() -> discord.Client:
         message = build_price_response_text(result, normalized, price_timeout)
         await interaction.followup.send(message, ephemeral=True)
 
-    @tree.command(name="unbox", description="Interactive setup for Victor/Clerk")
+    @tree.command(name="unbox", description="Interactive setup for cIerk")
     async def unbox(interaction: discord.Interaction) -> None:
         member = interaction.user if isinstance(interaction.user, discord.Member) else None
         if not member or not (
